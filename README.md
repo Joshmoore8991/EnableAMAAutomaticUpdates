@@ -1,47 +1,87 @@
-# EnableAMAAutomaticUpdates
-Enable Automatic Updates for AMA Agents
+Overview
+This PowerShell script enables Automatic Upgrade for the Azure Monitor Agent (AMA) extensions across:
+Azure Virtual Machines (AzVM)
+Azure Arc-enabled Servers (AzArc)
+It ensures that all applicable machines automatically upgrade their monitoring agent without manual intervention, helping maintain better security, performance, and reliability.
+
+Features
+✅ Detects and processes all subscriptions available to the user.
+ ✅ Supports both Azure VMs and Arc Machines.
+✅ Dynamically detects Linux or Windows OS and applies the correct AMA extension type.
+✅ Preserves existing settings and protected settings during upgrade.
+✅ Automatically installs missing Az modules if needed.
+✅ Handles missing or incomplete AMA extension data gracefully without crashing.
+
+Requirements
+PowerShell 5.1 (Windows) or PowerShell 7.x (Cross-platform)
+Azure PowerShell modules:
+Az.Accounts
+Az.Compute
+Az.ConnectedMachine
+Azure permissions:
+Reader and Contributor rights on target subscriptions/machines.
+Network access to Azure Resource Manager endpoints.
+
+Installation
+Save the script as Enable-AutomaticUpgradeAMA.ps1.
+Open PowerShell as Administrator.
+(Optional) Allow running local scripts:
+powershellCopyEditSet-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+
+Ensure you are logged into Azure:
+powershellCopyEditConnect-AzAccount
 
 
-How the Script Works
-Install Required Modules:
+Usage
+Run the script specifying the environment you want to target:
+powershellCopyEdit.\Enable-AutomaticUpgradeAMA.ps1 -Environment <AzVM | AzArc | Both>
 
-The script checks if the required Azure PowerShell modules (Az.Accounts, Az.Compute, and Az.ConnectedMachine) are installed. If any are missing, it automatically installs them.
+Parameters
+﻿NameTypeDescriptionRequired
+Environment	string	Target environment: AzVM, AzArc, or Both	Yes
+﻿
+Examples
+Enable Automatic Upgrade for only Azure VMs:
+powershellCopyEdit.\Enable-AutomaticUpgradeAMA.ps1 -Environment AzVM
 
-Azure Login:
+Enable Automatic Upgrade for only Azure Arc Machines:
+powershellCopyEdit.\Enable-AutomaticUpgradeAMA.ps1 -Environment AzArc
 
-The script attempts to connect to your Azure account using Connect-AzAccount. Ensure that your Azure credentials are valid.
+Enable Automatic Upgrade for both VMs and Arc Machines:
+powershellCopyEdit.\Enable-AutomaticUpgradeAMA.ps1 -Environment Both
 
-Subscription Iteration:
+Run with verbose output to troubleshoot or monitor actions:
+powershellCopyEdit.\Enable-AutomaticUpgradeAMA.ps1 -Environment Both -Verbose
 
-The script retrieves a list of all Azure subscriptions and sets the context for each subscription one by one.
 
-Azure VMs Handling:
+How It Works
+Connects to Azure and loops through all available subscriptions.
+Retrieves all Virtual Machines and/or Arc-enabled Machines.
+For each machine:
+Checks if the Azure Monitor Agent extension is installed.
+Verifies if Automatic Upgrade is already enabled.
+If not enabled:
+Determines OS type (Windows or Linux).
+Reapplies the extension with EnableAutomaticUpgrade = true, preserving existing settings.
+Outputs status for each machine processed.
 
-If the environment is set to AzVM or Both, it retrieves a list of all Azure VMs.
-
-For each VM, it checks whether the AMA extension is installed and whether automatic upgrade is enabled.
-
-If the automatic upgrade is not enabled, the script enables it.
-
-Azure Arc Servers Handling:
-
-If the environment is set to AzArc or Both, it retrieves a list of all Azure Arc Servers.
-
-For each Arc server, it checks whether the AMA extension is installed and whether automatic upgrade is enabled.
-
-If the automatic upgrade is not enabled, the script enables it.
-
-Error Handling
-Connection Issues: If the script fails to connect to Azure, it will display a warning and exit.
-
-No VMs/Arc Servers: If no VMs or Arc Servers are found in the selected subscription, a message will be displayed indicating this.
-
-Output
-Verbose Output: The script provides detailed verbose messages during its execution. To see these, ensure that $VerbosePreference is set to Continue or use Write-Verbose for additional details.
-
-Success/Failure Messages: After the script runs, it will display messages indicating whether automatic upgrade was enabled or already enabled for each VM/Arc Server.
+Notes
+Only machines with the Microsoft.Azure.Monitor extension installed will be affected.
+Machines that already have EnableAutomaticUpgrade = true are skipped.
+The script is safe to rerun multiple times; it will not reapply if not needed.
+Azure Arc updates use Update-AzConnectedMachineExtension; Azure VMs use Set-AzVMExtension.
 
 Troubleshooting
-Cannot Connect to Azure: Ensure that your credentials are valid and you are logged into Azure with sufficient permissions.
+Modules not found: The script auto-installs missing modules, but you can also manually run:
+powershellCopyEditInstall-Module Az -Scope CurrentUser -Repository PSGallery -Force
 
-Missing Modules: The script attempts to install the necessary modules. If there is an issue with module installation, make sure your machine is connected to the internet and has access to the PowerShell Gallery.
+Permission errors: Make sure your Azure account has Contributor permissions to modify machine extensions.
+Execution Policy errors: Set execution policy as shown above if your environment blocks running scripts.
+
+License
+MIT License.
+
+Author
+Script Owner: Joshua Moore
+Date Created: April 2025
+Last Updated: April 2025
