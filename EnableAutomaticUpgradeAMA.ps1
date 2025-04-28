@@ -1,128 +1,114 @@
 param (
-    [Parameter(Mandatory)]    
+    [Parameter(Mandatory)]
     [ValidateSet("AzVM", "AzArc", "Both")]
-    [String]$Environment = 'Both'   
+    [string]$Environment = 'Both'
 )
 
-#! Install Az Module If Needed
+# Install Az Module If Needed
 function Install-Module-If-Needed {
-    param([string]$ModuleName) 
+    param([string]$ModuleName)
     if (Get-Module -ListAvailable -Name $ModuleName -Verbose:$false) {
-        Write-Host "Module '$($ModuleName)' already exists, continue..." -ForegroundColor Green
-    } 
-    else {
-        Write-Host "Module '$($ModuleName)' does not exist, installing..." -ForegroundColor Yellow
-        Install-Module $ModuleName -Force  -AllowClobber -ErrorAction Stop
+        Write-Host "Module '$($ModuleName)' already exists." -ForegroundColor Green
+    } else {
+        Write-Host "Module '$($ModuleName)' not found. Installing..." -ForegroundColor Yellow
+        Install-Module $ModuleName -Force -AllowClobber -ErrorAction Stop
         Write-Host "Module '$($ModuleName)' installed." -ForegroundColor Green
     }
 }
 
-#! Install Az Accounts Module If Needed
+# Install required modules
 Install-Module-If-Needed Az.Accounts
-
-#! Install Az Compute Module If Needed
 Install-Module-If-Needed Az.Compute
-
-#! Install Az ConnectedMachine Module If Needed
 Install-Module-If-Needed Az.ConnectedMachine
 
-#! Check Azure Connection
-Try { 
-    Write-Verbose "Connecting to Azure Cloud..." 
-    Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null 
-}
-Catch { 
-    Write-Warning "Cannot connect to Azure Cloud. Please check your credentials. Exiting!" 
-    Break 
+# Connect to Azure
+try {
+    Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+} catch {
+    Write-Warning "Cannot connect to Azure Cloud. Check your credentials."
+    break
 }
 
+# Get all subscriptions
 $azSubs = Get-AzSubscription
 
-foreach ( $azSub in $azSubs ) {
-    $azSubName = $azSub.Name
-    Write-Verbose "Set the Azure context to the subscription name: $($azSubName)"
+foreach ($azSub in $azSubs) {
     Set-AzContext -Subscription $azSub | Out-Null
-    
-    If ($Environment -eq "AzVM" -or $Environment -eq "Both") {
-        # Handle AzVM (Azure Virtual Machines)
-        $azVMs = Get-AzVM -ErrorAction SilentlyContinue        
-        If ($azVMs) {
-            Write-Verbose "Get the list of all Azure VMs that have AMA extension installed and Automatic Upgrade is NOT enabled..."
-            $amas = @()
-            $enabledAMA = @() # Array to hold VMs with automatic upgrade enabled
-        
-            foreach ($azVM in $azVMs) {        
-                $amas += Get-AzVMExtension -VMName $azVM.Name -ResourceGroupName $azVM.ResourceGroupName | `
-                    Where-Object { $_.Publisher -eq "Microsoft.Azure.Monitor" }
+    Write-Host "Processing subscription: $($azSub.Name)" -ForegroundColor Cyan
 
-                # Check if automatic upgrade is enabled
-                $enabledAMA += $amas | Where-Object { $_.EnableAutomaticUpgrade -eq $True }
-            }
+    if ($Environment -eq "AzVM" -or $Environment -eq "Both") {
+        # Handle Azure VMs
+        $azVMs = Get-AzVM -ErrorAction SilentlyContinue
+        if ($azVMs) {
+            foreach ($vm in $azVMs) {
+                $amaExtension = Get-AzVMExtension -VMName $vm.Name -ResourceGroupName $vm.ResourceGroupName `
+                    | Where-Object { $_.Publisher -eq "Microsoft.Azure.Monitor" }
 
-            If ($enabledAMA) {
-                Write-Host "The following Azure VMs have Automatic Upgrade enabled for AMA:"
-                $enabledAMA | ForEach-Object { Write-Host "$($_.VMName)" -ForegroundColor Green }
-            } else {
-                Write-Host "No Azure VMs have Automatic Upgrade enabled for AMA."
-            }
+                if ($amaExtension) {
+                    if (-not $amaExtension.EnableAutomaticUpgrade) {
+                        Write-Host "Enabling Automatic Upgrade for VM: $($vm.Name)" -ForegroundColor Yellow
 
-            If ($amas) {
-                Write-Verbose "Enabling Automatic Upgrade for VMs where it's not enabled..."
-                foreach ($ama in $amas) {
-                    If ($ama.EnableAutomaticUpgrade -eq $False) {
-                        Write-Verbose "Enabling Automatic Upgrade for the Azure VM: $($ama.VMName)"
-                        $ama | Set-AzVMExtension -EnableAutomaticUpgrade $True | Out-Null   
+                        # Determine OS type
+                        $vmOS = $vm.StorageProfile.OSDisk.OSType
+                        if ($vmOS -eq "Linux") {
+                            $extensionType = "AzureMonitorLinuxAgent"
+                        } else {
+                            $extensionType = "AzureMonitorWindowsAgent"
+                        }
+
+                        # Reapply extension with EnableAutomaticUpgrade
+                        Set-AzVMExtension -ResourceGroupName $vm.ResourceGroupName `
+                                          -VMName $vm.Name `
+                                          -Name $amaExtension.Name `
+                                          -Publisher $amaExtension.Publisher `
+                                          -ExtensionType $extensionType `
+                                          -TypeHandlerVersion $amaExtension.TypeHandlerVersion `
+                                          -Settings $amaExtension.Settings `
+                                          -ProtectedSettings $amaExtension.ProtectedSettings `
+                                          -Location $vm.Location `
+                                          -EnableAutomaticUpgrade $true `
+                                          -ForceRerun ($([guid]::NewGuid().ToString())) `
+                                          -ErrorAction Stop
+
+                        Write-Host "Automatic Upgrade enabled for VM: $($vm.Name)" -ForegroundColor Green
+                    } else {
+                        Write-Host "Automatic Upgrade already enabled for VM: $($vm.Name)" -ForegroundColor Green
                     }
                 }
             }
-            else {
-                Write-Verbose "All Azure VMs have Automatic Upgrade Extension enabled for AMA!"
-            }
+        } else {
+            Write-Host "No Azure VMs found in subscription: $($azSub.Name)" -ForegroundColor DarkYellow
         }
-        else {
-            Write-Verbose "No Azure VMs found for the subscription name: $($azSubName)!"
-        }   
     }
 
-    If ($Environment -eq "AzArc" -or $Environment -eq "Both") {
-        # Handle AzArc (Azure Arc Servers)
+    if ($Environment -eq "AzArc" -or $Environment -eq "Both") {
+        # Handle Azure Arc Servers
         $azArcServers = Get-AzConnectedMachine -ErrorAction SilentlyContinue
-        If ($azArcServers) {
-            Write-Verbose "Get the list of all Azure Arc Servers that have AMA extension installed and Automatic Upgrade is NOT enabled..."
-            $amas = @()
-            $enabledAMA = @() # Array to hold Arc Servers with automatic upgrade enabled
-                
-            foreach ($azVM in $azArcServers) {        
-                $amas += Get-AzConnectedMachineExtension -MachineName $azVM.Name -ResourceGroupName $azVM.ResourceGroupName | `
-                    Where-Object { $_.Publisher -eq "Microsoft.Azure.Monitor" }
+        if ($azArcServers) {
+            foreach ($arcMachine in $azArcServers) {
+                $amaExtension = Get-AzConnectedMachineExtension -MachineName $arcMachine.Name -ResourceGroupName $arcMachine.ResourceGroupName `
+                    | Where-Object { $_.Publisher -eq "Microsoft.Azure.Monitor" }
 
-                # Check if automatic upgrade is enabled
-                $enabledAMA += $amas | Where-Object { $_.EnableAutomaticUpgrade -eq $True }
-            }
+                if ($amaExtension) {
+                    if (-not $amaExtension.EnableAutomaticUpgrade) {
+                        Write-Host "Enabling Automatic Upgrade for Arc Server: $($arcMachine.Name)" -ForegroundColor Yellow
 
-            If ($enabledAMA) {
-                Write-Host "The following Azure Arc Servers have Automatic Upgrade enabled for AMA:"
-                $enabledAMA | ForEach-Object { Write-Host "$($_.MachineName)" -ForegroundColor Green }
-            } else {
-                Write-Host "No Azure Arc Servers have Automatic Upgrade enabled for AMA."
-            }
+                        Update-AzConnectedMachineExtension -Name $amaExtension.Name `
+                                                           -ResourceGroupName $arcMachine.ResourceGroupName `
+                                                           -MachineName $arcMachine.Name `
+                                                           -EnableAutomaticUpgrade $true `
+                                                           -Settings $amaExtension.Settings `
+                                                           -ProtectedSettings $amaExtension.ProtectedSettings `
+                                                           -ErrorAction Stop
 
-            If ($amas) {
-                Write-Verbose "Enabling Automatic Upgrade for Arc Servers where it's not enabled..."
-                foreach ($ama in $amas) {
-                    If ($ama.EnableAutomaticUpgrade -eq $False) {
-                        $machineName = $ama.id.Split('/')[-3]
-                        Write-Verbose "Enabling Automatic Upgrade for the Azure Arc Server: $($machineName)"
-                        $ama | Update-AzConnectedMachineExtension -EnableAutomaticUpgrade | Out-Null          
+                        Write-Host "Automatic Upgrade enabled for Arc Server: $($arcMachine.Name)" -ForegroundColor Green
+                    } else {
+                        Write-Host "Automatic Upgrade already enabled for Arc Server: $($arcMachine.Name)" -ForegroundColor Green
                     }
                 }
             }
-            else {
-                Write-Verbose "All Azure Arc Servers have Automatic Upgrade Extension enabled for AMA!"
-            }
-        }
-        else {
-            Write-Verbose "No Azure Arc Servers found for the subscription name: $($azSubName)!"
+        } else {
+            Write-Host "No Azure Arc Servers found in subscription: $($azSub.Name)" -ForegroundColor DarkYellow
         }
     }
 }
